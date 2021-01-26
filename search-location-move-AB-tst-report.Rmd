@@ -1,0 +1,847 @@
+---
+title: "Search Location Move AB Test Report"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+author: 
+- affiliation: "Data Scientist, Wikimedia Foundation"
+  name: "Megan Neisler"
+
+output:
+  html_document:
+    fig_caption: yes
+    fig_width: 12
+    fig_height: 10
+    toc: yes
+    toc_depth: 1
+    toc_float:
+      collapsed: no
+  pdf_document:
+    citation_package: natbib
+    fig_height: 6
+    fig_width: 15
+    keep_tex: yes
+    latex_engine: xelatex
+    template: svm-latex-ms.tex
+---
+
+```{r setup, include=FALSE}
+library(magrittr)
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(BCDA)
+library(binom)
+library(dplyr)
+library(car)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+set.seed(0)
+
+if (!"printr" %in% installed.packages()[, "Package"]) {
+  install.packages("printr", type = "source", repos = c("Yihui Xie" = "http://yihui.name/xran", CRAN = "http://cran.rstudio.com"))
+} else {
+  loadNamespace("printr")
+}
+is_html <- function() {
+  if (length(opts_knit$get("rmarkdown.pandoc.to")) > 0) {
+    return(opts_knit$get("rmarkdown.pandoc.to") == "html")
+  } else {
+    return(FALSE)
+  }
+}
+if (is_html()) {
+  options(knitr.table.format = "html")
+} else {
+  options(knitr.table.format = "latex")
+}
+opts_chunk$set(
+  echo = is_html(), warning = FALSE, message = FALSE,
+  out.width='\\textwidth', dev = 'png', fig.ext = 'png',
+  dpi = ifelse(is_html(), 150, 300)
+)
+path <- function(x) {
+  if (grepl("docs", getwd(), fixed = TRUE)) {
+    return(file.path("..", x))
+  } else {
+    return(x)
+  }
+}
+fable <- function(x, caption = NULL, ...) {
+  if (is_html()) {
+    return({
+      kable(x, caption = caption, booktabs = TRUE) %>%
+      kable_styling(bootstrap_options = c("striped", "hover"), ...)
+    })
+  } else {
+    return(kable(x, caption = caption, ...))
+  }
+}
+```
+
+```{r captions, include=FALSE}
+# Manual figure & table captioning:
+library(captioner) 
+table_caps <- captioner(prefix = "Table")
+figure_caps <- captioner(prefix = "Figure")
+code_caps <- captioner(prefix = "Snippet")
+# Custom caption formatting and printing:
+format_caption <- function(caps, name) {
+  return({
+    sub(caps(name, display = "cite"),
+      paste0(ifelse(is_html(), "**", "\\textbf{"), caps(name, display = "cite"), ifelse(is_html(), "**", "}")),
+      caps(name, display = "full"), fixed = TRUE) %>%
+    sub("  ", " ", ., fixed = TRUE)
+  })
+}
+print_caption <- function(formatted_caption) {
+  cat(paste0('<p class = "caption">', formatted_caption, '</p>', collapse = ''))
+}
+
+# Add captions
+table_caps(name = "Search sessions count", caption = "Number of search sessions initiated by search location and wiki during the AB test.")
+table_caps(name = "Linear Regression Model Estimates", caption = "Parameter estimates obtained by fitting the model to the search sessions initiated data using lm R package.")
+table_caps(name = "Beta-Binomial model estimates", caption = "Parameter estimates obtained by fitting the model to the search sessions completed data using the BCDA R package.")
+table_caps(name = "Search ctr by session relative risk", caption = "How likely new search location users were to click on a search result at least once in a session by wiki.")
+table_caps(name = "CTR by search relative risk overall", caption = "How likely new search location users were to click on a search result during a search.")
+table_caps(name = "CTR by search relative risk by wiki", caption = "How likely new search location users were to click on a search result during a search by wiki.")
+figure_caps(name = "Total searches initiated", caption = "Total number of search sessions initiated by search location group and wiki.")
+figure_caps(name = "Distribution of search sessions initiated", caption = "The boxplot shows the distribution of the search sessions initiated across all of the test wikis. A logarithmic scale was applied to the number of search sessions initiated (y-axis) to address the large discrepancies between data for each wiki. ")
+figure_caps(name = "Daily search sessions initiated", caption = "Total daily search sessions initiated before and following deployment of the AB test (5 October 2020 through 4 November 2020.). The figure includes a comparison of overall daily search sessions for Wikis included in the AB test and a similar set of Wikis not included in the AB test. Post deployment search sessions are highlighted in yellow")
+figure_caps(name = "Search Sessions Initiated Pre AB Test vs Post AB Test by Search Location Group", caption = "Search Sessions Initiated Pre AB Test vs Post AB Test by Search Location Group. We applied the log transformation to both the pre and post deployment data to address skew in the data caused by outlier Wikis ")
+figure_caps(name = "BCDA ctr sessions overall", caption = "How likely new search location users were to click on a search result at least once in a session overall. A relative risk greater than 1 indicates the test group was more likely to complete a session, while a relative risk less than 1 indicates the test group was less likely to complete a session")
+figure_caps(name = "Completed search sessions by search location and wiki", caption = "Search sessions completed by search location by each Wiki included in the AB Test, where a completed search session is defined as a session with at least 1 click to a provided search result.")
+figure_caps(name = "BCDA ctr sessions by wiki", caption = "How likely new search location users were to click on a search result at least once in a session by wiki. A relative risk greater than 1 indicates the test group was more likely to complete a session, while a relative risk less than 1 indicates the test group was less likely to complete a session")
+figure_caps(name = "Average Searches and Clicks", caption = "Average number of searches and average clicks per session by search location and wiki included in the AB Test")
+figure_caps(name = "BCDA ctr searches overall", caption = "How likely new search location users were to click on a search result during a search overall. A relative risk greater than 1 indicates the test group was more likely to complete a session, while a relative risk less than 1 indicates the test group was less likely to complete a session")
+figure_caps(name = "CTR searches by wiki", caption = "Clickthrough rates of test groups, split by wiki.")
+figure_caps(name = "BCDA ctr searches by wiki", caption = "How likely new search location users were to click on a search result during a search by wiki. A relative risk greater than 1 indicates the test group was more likely to complete a session, while a relative risk less than 1 indicates the test group was less likely to complete a session")
+
+```
+
+
+# Introduction
+
+The Wikimedia Foundation's [Web team](https://www.mediawiki.org/wiki/Readers/Web/Team) is working on researching and building out improvements to the desktop experience to make Wikimedia wikis more welcoming and to increase the utility amongst readers while maintaining utility for existing editors.
+
+As part of this effort, the Web team deployed a new location of the search bar, moving the search bar to a more prominent location on the top of the page. The team ran an A/B test of the new location from 20 October 2020 through 4 November 2020 to assess the efficacy of this feature. The test included all logged-in users on the early adopter wikis (Basque Wikipedia, French Wikipedia, French Wiktionary, Hebrew Wikipedia, Persian Wikipedia, and Portuguese Wikiversity). In the test, 50% of logged-in users saw the search bar in the new location, while the other 50% continued to see the search bar in the previous location. 
+
+The new location (as shown in screenshot below) was also deployed as default for anonymous users on our early adopter wikis, and by preference for all other users.
+
+![](Figures/search_header_move_example.png)
+ 
+The primary goal of the AB Test was to test the hypothesis that the group with the search bar in the new location will initiate more search sessions. The target was identified as 2.5% overall increase in search sessions initiated. The other primary questions we wanted to answer are:
+
+* Which group has a higher rate of search sessions completed? How does this differ per wiki?
+* Have any other interesting search trends emerged?
+* For logged-out users, are there any perceived changes in search behavior before/after the change?
+
+Upon conclusion of the test on  4 November 2020, a total of 61,602 search sessions had been initiated across both groups. You can find more information on this change and other feature deployments on the [desktop improvement project page](https://www.mediawiki.org/wiki/Reading/Web/Desktop_Improvements).
+
+# Methodology
+
+The AB test was a run on a per wiki basis and users included in the test were randomly assigned to either the control (search header in the old location) or treatment (search header in the new location) using their user ID and received the same treatment the duration of the test. 
+
+Data was collected in the [SearchSatisfaction](https://gerrit.wikimedia.org/r/plugins/gitiles/schemas/event/secondary/+/refs/heads/master/jsonschema/analytics/legacy/searchsatisfaction/current.yaml) event logging table.  
+
+See the following Phabricator tickets for further details regarding the instrumentation and implementation of the AB test:
+
+  * A/B test set-up [T259250](https://phabricator.wikimedia.org/T259250).
+  * A/B test deployment [T263032](https://phabricator.wikimedia.org/T263032)
+  * SearchSatisfaction Instrumentation setup [T251740](https://phabricator.wikimedia.org/T251740) and changes [T256100](https://phabricator.wikimedia.org/T256100) 
+  * AB test end [T265333](https://phabricator.wikimedia.org/T265333)
+
+
+```{r session_init_data, cache=TRUE, include=FALSE}
+collect_search_session_data <- read.csv(file = 'Data/search_sessions_initiated.csv', header = TRUE, sep="\t", stringsAsFactors = FALSE) # loads search_sessions data
+
+collect_search_session_data$session_start <- as.Date(collect_search_session_data$session_start, format = "%Y-%m-%d") #date formatting
+
+# add logged-in status column to clarfiy isanon
+search_sessions <- collect_search_session_data %>%
+ mutate(logged_in_status = case_when(
+          is_anonymous == 'NULL' ~ "unknown", # some NULL records were recorded prior to deployment of isAnon field
+          is_anonymous == 'false'~ "logged-in",
+          is_anonymous == 'true' ~ "logged-out")
+  )
+```
+
+# Search Sessions Initiated
+A search session begins when a person starts typing in the search widget. We measured the number of unique search sessions started for each search location type and wiki included in the AB Test. 
+
+We initally considered using a [Welch two-sample t-test](https://en.wikipedia.org/wiki/Welch%27s_t-test) to determine if there is statistical difference between the two means; however, since there are only 6 observations (each wiki serves as a single observation in this case), there was not enough evidence to confirm a difference between the number of search sessions initiated between the two groups.  
+
+As an alternative, we conducted a pre and post deployment analysis comparing changes in search sessions initiated for the 6 test wikis to a set of wikis not included in the test from 6 October 2020 through 3 November 2020 (two weeks before and after deployment of the change).
+
+We selected similar Wiki projects to each of the test wikis for comparison. These Wikis were selected based on their size (number of articles) and desktop pageview traffic during the reviewed time period.
+
+| Test Wiki | Similar Wikis |
+|---------|-----------------|
+| Basque Wikipedia  | Slovenian Wikipedia, Belarusian Wikipedia |
+| French Wikipedia  | German Wikpedia           |
+| French Wikitionary | Russian Wiktionary, Spanish Wiktionary              |
+| Hebrew Wikipedia      |  Catalan Wikipedia, Danish Wikipedia, Romanian Wikipedia              |
+| Persian Wikipedia      |   Arabic Wikipedia, Indonesian Wikipedia              |
+| Portuguese Wikiversity      |  Japanese Wikiversity               |
+
+Note: For wikis not included in the AB test, the new search location was displayed for all users that had enabled the new vector skin in their user preferences. In this analysis, we removed these users that had enabled the new search location by only reviewing search sessions initatiated on the old ('legacy') vector skin.
+
+
+## Search Sessions Initiated Counts by Search Location and Wiki in AB Test
+
+```{r search_sessions_initiated_data, echo = FALSE}
+search_sessions_ab_bywiki <- search_sessions %>%
+    filter(logged_in_status == 'logged-in', #logged out users not included
+          test_group == 'WikiProjectInTest',
+          session_start >= '2020-10-20') %>% # AB test rereun on October 20
+    mutate(wiki = case_when(
+        wiki == 'euwiki' ~ "Basque Wikipedia", # some NULL records were recorded prior to deployment of isAnon field
+        wiki == 'frwiki'~ "French Wikipedia",
+        wiki == 'frwiktionary' ~ "French Wikitionary",
+        wiki == 'hewiki' ~ 'Hebrew Wikipedia',
+        wiki == 'fawiki' ~ 'Persian Wikipedia',
+        wiki == 'ptwikiversity' ~ 'Portuguese Wikipedia'
+    )) %>%
+    group_by(wiki, search_location) %>%
+    summarize(sessions = length(unique(search_session)), .groups = "drop") 
+```
+
+
+```{r summary_stats_data, echo = FALSE}
+session_counts <- search_sessions_ab_bywiki %>%
+    xtabs(sessions ~ wiki + search_location, data = .) %>%
+    addmargins
+```
+
+
+```{r summary_stats_table, results='asis', echo=FALSE}
+session_counts %>%
+  as.data.frame.matrix %>%
+  set_colnames(c("New Search Location (Treatment)", "Old Search Location (Control)", "Both Groups")) %>%
+  set_rownames(c("Basque Wikipedia", "Persian Wikipedia", "French Wikipedia", "French Wikitionary", 
+                "Hebrew Wikipedia", "Portuguese Wikiversity", "All 6 wikis")) %>%
+  fable(format_caption(table_caps, "Search sessions count"))
+```
+
+```{r searches_initiated_total_caption, echo=FALSE}
+searches_initiated_total_cap <- format_caption(figure_caps, "Total searches initiated")
+```
+
+```{r search_sessions_initiated_total, echo=FALSE, fig.cap=searches_initiated_total_cap}
+
+p <- search_sessions_ab_bywiki  %>%
+        ggplot(aes(x=search_location, y= sessions, fill = search_location)) +
+        geom_col(position = 'dodge') +
+        geom_text(aes(label = paste(sessions)), vjust=-0.5) +
+        facet_wrap(~wiki, scale = "free_y") +
+        labs (y = "Number of search sessions initiated",
+              x = NULL,
+             title = "Number of search sessions initiated by search location and wiki",
+             subtitle = "For Wikis included in the AB Test")  +
+        theme_bw() +
+        scale_fill_brewer(name="Search Location", palette="Set1")  +
+        theme(
+            plot.title = element_text(hjust = 0.5),
+            text = element_text(size=12),
+            axis.title.x=element_blank(),
+            axis.text.x=element_blank(),
+            legend.position = "bottom")
+      
+p
+ggsave("Figures/search_sessions_initiated_totals.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+The total number of distinct search sessions initiated range from 48985 search sessions on French Wikipedia to only 19 search sessions on Portuguese Wikiversity. 
+
+The search location with the higher number of search sessions initiated varies for each of the test wikis. Basque Wikipedia, Persian Wikipedia, French Wikitionary, and Portuguese Wikiversity had more search sessions initiated when the search widget was displayed in the new location while French Wikipedia and Hebrew Wikipedia had more search sessions initiated when the search widget was displayed in the old location.
+
+
+```{r searches_initiated_boxplot, echo=FALSE}
+searches_initiated_boxplot_cap<- format_caption(figure_caps, "Distribution of search sessions initiated")
+```
+
+```{r search_sessions_initiated_boxplot, echo=FALSE, fig.cap=searches_initiated_boxplot_cap}
+
+p <- ggplot(search_sessions_ab_bywiki, aes(x = search_location, y = sessions, color = search_location)) +
+  geom_jitter(height = 0, width = 0.1) +
+  geom_boxplot(alpha = 0.1) +
+  scale_y_log10() + #use log scale to address frwiki outliers
+  labs(y = "Number of search sessions initiated (on base-10 scale)",
+    x = NULL,
+    title = "Distribution of search sessions initiated by search location",
+    subtitle = "For Wikis included in the AB Test")  +
+  theme_bw() +
+  scale_color_brewer(name = "Search Location", palette="Set1")  +
+  theme(
+            plot.title = element_text(hjust = 0.5),
+            text = element_text(size=12),
+            axis.title.x=element_blank(),
+            axis.text.x=element_blank(),
+            legend.position = "bottom")
+      
+p
+ggsave("Figures/search_sessions_initiated_boxplot.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+The boxplot above shows the distribution of the search sessions initiated across all of the test wikis. We applied a logarithmic scale to the number of search sessions initiated (y-axis) to address the large discrepancies between data for each wiki.
+
+The overall distribution between the two test groups are similar. The middle half of the data for each test group has little variability in the search sessions initiated and each has two outliers: French Wikipedia and Portuguese Wikiversity. The new search location has a slightly higher overall number of search sessions initiated compared to the old search location.
+
+
+## Search Sessions Initiated Pre and Post AB Test Deployment
+
+To determine if the search location move had an impact, we calculated the total number of unique search sessions initiated by test Wiki and search location group for a two-week period before and after the AB test. We compared these results to search sessions initiated on similar size wikis over the same time period.
+
+Unfortunately, we are unable to identify logged in or anonymous users prior to 20 October 2020 when the`isAnon` field was added to the SearchSatisfaction schema and the AB test was started.  As a result, we reviewed both logged-in and logged-out users when comparing search sessions initiated pre and post deployment of the AB test; however, only logged-in users were included in the AB test. Logged-out users on the test wikis received the new search location by default. 
+
+
+```{r search_sessions_daily, echo=FALSE}
+# search sessions intiated per day and test group
+search_sessions_daily <- search_sessions %>%
+    filter(test_group != 'NA') %>% # removes users not in either test group 
+    group_by(session_start, test_group) %>%
+    summarize(sessions = length(unique(search_session)), .groups = "drop") 
+```
+
+```{r search_sessions_daily_cap, echo=FALSE}
+search_sessions_daily_cap <- format_caption(figure_caps, "Daily search sessions initiated")
+```
+
+```{r search_sessions_daily_plot, echo = FALSE, fig.cap=search_sessions_daily_cap}
+# Plot per test group comparison
+
+p <- search_sessions_daily %>%
+    ggplot( aes(x = session_start, y = sessions)) +
+    geom_col(fill = 'darkblue') +
+    geom_col(
+    data = filter(search_sessions_daily, session_start >= "2020-10-20"),
+    alpha = 0.1, color = "yellow", size = 3
+    ) +
+    facet_wrap(~ test_group, scale = 'free_y') +
+    scale_x_date(date_labels = "%b-%d", date_breaks = "1 week", minor_breaks = NULL) +
+    scale_y_continuous(labels = polloi::compress) +
+    scale_color_brewer(palette = "Set1") +
+    labs(
+      x = NULL, y = "unique sessions started",
+      title = "Daily search sessions initiated for Wikis included in AB Test",
+      subtitle = "Post AB Test traffic highlighted",
+      caption = "Wikipedias in AB Test: Basque Wikipedia, French Wikipedia, French Wikitionary, Hebrew Wikipedia, Persian   Wikipedia, Portuguese Wikiversity
+      \n Wikipedias not in AB Test: Slovenian Wikipedia, Belarusian Wikipedia, German Wikipedia, Russian Wiktionary, Spanish Wikitionary, Catalan Wikipedia, Danish Wikipedia, 
+        Romanian Wikipedia, Arabic WIkipedia, Indonesian Wikipedia, Japanese Wikiversity"
+ ) +
+    theme(legend.position = "bottom") + 
+    theme_bw()
+
+```
+
+![](Figures/daily_search_sessions_initiated_prepost.png)
+
+The figure above shows the total daily search sessions initiated for all test wikis compared to similar wikis from 5 October 2020 through 4 November 2020. Post-AB test deployment search events are highlighted in yellow.  Overall, there appears to be no sudden change in daily search sessions initiated following deployment of the AB test on the test wikis. 
+
+We fit a linear regression model to correctly infer the impact of the search location move on the number of search sessions initiated and confirm any statistical difference between pre and post deployment data.
+
+
+```{r search_sessions_bywiki, echo = FALSE}
+# pre and post data by test group and wiki
+search_sessions_bywiki <- search_sessions %>%
+    filter(test_group != 'NA') %>%  # removes users not in either test group
+    mutate(deploy_status = if_else(session_start < '2020-10-20', 'pre', 'post'),
+          )  %>%
+    group_by(wiki, test_group, deploy_status) %>%
+    summarise(num_sessions = n_distinct(search_session), .groups = "drop") %>%
+    ungroup() %>%
+    spread(deploy_status, num_sessions)
+
+# write.csv(search_sessions_bywiki, file = 'Data/search_sessions_bywiki.csv')
+```
+
+```{r data, cache=TRUE, include=FALSE}
+search_sessions_bywiki <- read.csv(file = 'Data/search_sessions_bywiki.csv', header = TRUE, sep="\t") # loads search_sessions by wiki data
+#set test group factor levels
+search_sessions_bywiki$test_group <- factor(search_sessions_bywiki$test_group, levels = c("NA", "WikiProjectNotInTest", "WikiProjectInTest"))
+```
+
+```{r search_sessions_pre_post_cap, echo=FALSE}
+search_sessions_initiated_pre_post_cap <- format_caption(figure_caps, "Search Sessions Initiated Pre AB Test vs Post AB Test by Search Location Group")
+```
+
+``` {r search_sessions_pre_post_plot, echo = FALSE, eval=FALSE, fig.cap=search_sessions_initiated_pre_post_cap }
+p <- search_sessions_bywiki %>%
+      ggplot( aes(x = log(pre), y = log(post), color = factor(test_group))) +
+      geom_point(size = 5) +
+      scale_x_continuous(labels = polloi::compress) +
+      scale_y_continuous(labels = polloi::compress) +
+      scale_color_brewer(palette = "Set1") +
+      labs(
+        x = "log(pre_deployment)", y = "log(post_deployment)",
+        title = "Search Sessions Initiated Pre AB Test vs Post AB Test by Search Location Group",
+        caption = "Wikipedias in AB Test: Basque Wikipedia, French Wikipedia, French Wikitionary, Hebrew Wikipedia, Persian Wikipedia, Portuguese Wikiversity
+      \n Wikipedias not in AB Test: Slovenian Wikipedia, Belarusian Wikipedia, German Wikipedia, Russian Wiktionary, Spanish Wikitionary, Catalan Wikipedia, Danish Wikipedia, 
+        Romanian Wikipedia, Arabic WIkipedia, Indonesian Wikipedia, Japanese Wikiversity",
+        colour = "Test Group") +
+        theme_bw() +
+      theme(legend.position = "bottom",
+            plot.title = element_text(hjust = 0.5),
+            text = element_text(size=14))  
+      
+```
+
+![](Figures/search_sessions_initiated_pre_v_post.png)
+
+We applied the log transformation to stabilize variance since the data are highly skewed by the outliers of French Wikipedia and Portuguese Wikiversity. Because the response variable is on the log scale, we then took the multiplicative effect of the treatment, and estimated the 95% confidence interval using the delta method.
+
+We obtained the following estimates fitting the model to the data using a simple linear regression model  (`lm`) function:
+
+
+```{r lm_summary_table, results='asis', echo=FALSE}
+lm_fit <- lm(log(post) ~ log(pre) + test_group, data = search_sessions_bywiki) 
+tab_model(lm_fit)
+```
+
+
+```{r mult_test_group_ci, echo = FALSE}
+mult_effect_test_group <- car::deltaMethod(lm_fit, "exp(test_groupWikiProjectInTest)") %>%
+  fable(format_caption(table_caps, "Linear Regression Model Estimates"))
+
+mult_effect_test_group
+```
+
+While the estimate of the effect of the new search location is 2.4% increase in search sessions initiated, the 95% credible interval contains 1, meaning we do not have sufficient evidence to draw definitive conclusions.
+
+Note that the effect from the search move is dampened because it was only deployed to 50% of logged-in users as part of the AB test. 
+
+
+# Search Sessions Completed
+
+We also calculated the percent of all search sessions in the AB test that included a click to one of the results returned by test wiki and search location. Data was restricted to only sessions that had more than zero results returned to them.
+
+We used the internally-developed Bayesian Categorical Data Analysis (BCDA) (Popov, n.d.) package for Bayesian statistical analysis and confidence intervals.
+
+
+```{r search_complete_data, cache=TRUE, include=FALSE}
+collect_ctr_data <- read.csv(file = 'Data/search_sessions_completed.csv', header = TRUE, sep="\t", stringsAsFactors = FALSE) # loads search_sessions data
+```
+
+
+```{r search_sessions_ab_ctr, echo = FALSE}
+search_sessions_ab_ctr <- collect_ctr_data  %>%
+    # Review only users included in AB test
+  filter(results_returned == TRUE, # remove searches with zero results
+         is_anonymous == 'false') %>%  # remove anon users not included in the AB test
+  mutate(search_wiki = case_when(  #rename Wikis
+          search_wiki == 'euwiki' ~ "Basque Wikipedia", 
+          search_wiki == 'frwiki'~ "French Wikipedia",
+          search_wiki == 'frwiktionary' ~ "French Wikitionary",
+          search_wiki == 'hewiki' ~ 'Hebrew Wikipedia',
+          search_wiki == 'fawiki' ~ 'Persian Wikipedia',
+          search_wiki == 'ptwikiversity' ~ 'Portuguese Wikipedia'),
+         search_location = factor( #set factor levels
+          search_location,
+          levels = c( "old_location", "new_location"),
+          labels = c("Old search location", "New search location"))  
+        )
+```
+
+
+## Clickthroughs by Session
+
+We first reviewed the number of sessions with at least one clickthrough to a provided search result by wiki and overall.
+
+### Overall
+
+```{r sessions_ctr_overall, echo = FALSE}
+# Sessions that clicked through by treatment group overall
+sessions_ctr_overall <- search_sessions_ab_ctr %>%
+   with(table(search_location, is_clickthrough_session))  
+
+```
+
+
+```{r bcda_sessions_ctr_overall,  echo = FALSE}
+bcda_sessions_ctr_overall <- BCDA::beta_binom(sessions_ctr_overall [2:1, 1:2]) #order factor levels in desc order for model
+```
+
+
+```{r bcda_sessions_ctr_overall_summary, echo = FALSE}
+present_bbfit(bcda_sessions_ctr_overall, digits = 3, interval_type = "HPD")
+
+fable(format_caption(table_caps, "Beta-Binomial model estimates"))
+```
+
+
+```{r bcda_sessions_ctr_overall_cap, echo=FALSE}
+bcda_sessions_ctr_overall_cap <- format_caption(figure_caps, "BCDA ctr sessions overall")
+```
+
+
+``` {r bcda_sessions_ctr_overall_plot, echo=FALSE, fig.cap=bcda_sessions_ctr_overall_cap}
+p <- plot(bcda_sessions_ctr_overall)
+
+p
+    
+ggsave("Figures/bcda_sessions_ctr_overall.png", p, width = 16, height = 8, units = "in", dpi = 300)
+
+```
+FIXME: NEED TO FORMAT PLOT ABOVE
+
+Table 3 and Figure 5 shows the relative risk – how much more likely the new search location test group is to engage with the search results than the Control group. Overall, users that saw the new search location are 1.098 times more likely to click on at least 1 search result in a session compared to users that saw the header in the old location with a 95% confidence interval of (1.002, 1.204).  
+
+
+### By Wiki
+
+```{r searches_ctr_bysession_wiki, echo = FALSE}
+# Sessions that clicked through by wiki and search location
+
+searches_ctr_bysession_wiki <- search_sessions_ab_ctr %>%
+    group_by(search_wiki, search_location) %>%
+    summarize(sessions = n_distinct(search_session), 
+            clickthroughs = sum(is_clickthrough_session == 'true'), .groups = "drop") %>%
+    group_by(search_wiki, search_location) %>%
+    dplyr::do(binom::binom.bayes(.$clickthroughs, .$sessions, conf.level = 0.95))
+```
+
+```{r search_sessions_completed_cap, echo=FALSE}
+search_sessions_completed_cap <- format_caption(figure_caps, "Completed search sessions by search location and wiki")
+```
+
+```{r search_sessions_completed_plot , echo=FALSE, fig.cap=search_sessions_completed_cap }
+p <- searches_ctr_bysession_wiki %>%
+  ggplot(aes(x = 1, color = search_location, y = mean, ymin = lower, ymax = upper)) +
+  geom_hline(aes(yintercept = mean), linetype = "dashed", color = RColorBrewer::brewer.pal(3, "Set1")[2],
+             data = filter(searches_ctr_bysession_wiki, search_location == "old_location")) +
+  geom_pointrange(position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = sprintf("%.1f%%", 100 * mean), y = upper + 0.0025, vjust = "bottom"),
+            position = position_dodge(width = 0.5)) +
+  facet_wrap(~ search_wiki, nrow = 1) +
+  scale_color_brewer("Group", palette = "Set1") +
+  scale_y_continuous("Percent of sessions with at least 1 click", labels = scales::percent_format()) +
+  theme_minimal(base_family = "GillSans") +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.background = element_rect(fill = "gray90"),
+        panel.border = element_rect(color = "gray30", fill = NA)) +
+  labs(x = NULL, 
+       title = "Completed search sessions by search location and Wiki",
+       subtitle = "Each point estimate includes a 95% credible interval"
+       )
+
+p
+ggsave("Figures/searches_ctr_bysession_wiki.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+
+```{r bcda_ctr_bysession_wiki_data, echo = FALSE}
+bcda_ctr_bysession_wiki <- searches_ctr_bysession_wiki %>%
+  arrange(search_wiki, desc(search_location)) %>%
+  group_by(search_wiki) %>%
+  dplyr::do(BCDA::tidy(BCDA::beta_binom(.$x, .$n), interval_type = "HPD")) %>%
+  ungroup()
+```
+
+```{r bcda_ctr_bysession_wiki_cap, echo=FALSE}
+bcda_ctr_bysession_wiki_cap <- format_caption(figure_caps, "BCDA ctr sessions by wiki")
+```
+
+```{r bcda_ctr_bysession_wiki_plot , echo=FALSE, fig.cap=bcda_ctr_bysession_wiki_cap}
+p <- bcda_ctr_bysession_wiki %>%
+  mutate(term = factor(
+    term,
+    levels = c("p2", "p1", "prop_diff", "relative_risk", "odds_ratio"),
+    labels = c("Pr[Old Search Location]", "Pr[New Search Location]", "Pr[New Search] - Pr[Old Search]", "Relative Risk", "Odds Ratio")
+  )) %>%
+  ggplot(aes(x = 1, y = estimate, ymin = conf.low, ymax = conf.high)) +
+  geom_segment(y = 1, yend = 1, x = 0.99, xend = 1.05, linetype = "dashed", color = "gray40") +
+  geom_segment(y = 0, yend = 0, x = 0.99, xend = 1.05, linetype = "dashed", color = "gray40") +
+  geom_pointrange() +
+  geom_text(aes(label = round(estimate, 4), y = estimate + (conf.high - estimate)/2,
+                hjust = "left"), nudge_x = 0.005) +
+  facet_grid(term ~ search_wiki, scales = "free_y") +
+  theme_minimal(base_family = "GillSans") +
+  scale_x_continuous(limits = c(0.99, 1.05)) +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.background = element_rect(fill = "gray90"),
+        panel.border = element_rect(color = "gray30", fill = NA),
+        strip.text.y = element_text(size = 12, angle = 0)) +
+  labs(x = NULL, y = "Estimate",
+       title = "How likely new search location users were to click on a search result at least once in a session",
+       subtitle = "Only including searches with results shown",
+       caption = "* 95% credible intervals calculated as Highest Posterior Density (HPD) intervals")
+p
+ggsave("Figures/bcda_ctr_bysession_wiki.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+
+```{r bcda_ctr_bysession_wiki_summary, results='asis', echo=FALSE}
+list(
+  "Test vs Control" = filter(bcda_ctr_bysession_wiki, term == "relative_risk")) %>%
+     dplyr::bind_rows(.id = "Comparison") %>%
+     mutate(ci = sprintf("(%.3f, %.3f)", conf.low, conf.high),
+         rr =  sprintf("%.3f", estimate)) %>%
+     select(Wiki = search_wiki,
+         `Relative Risk` = rr,
+         `95% CI` = ci) %>%
+     arrange(Wiki) %>%
+  fable(format_caption(table_caps, "Search ctr by session relative risk"))
+```
+
+On a per wiki basis, there were more completed search sessions (defined by sessions with at least 1 click to search result) for the new search location group than the old search location on Persian Wikipedia and French Wiktionary while the number of completed search sessions were lower on Hebrew Wikipedia, Basque Wikipedia, and French Wikipedia.
+
+Portuguese Wikiversity also had more completed search sessions for the new search location; however, there were only 19 observed sessions during the test period so we are not able to reliably determine if the new search location had an impact.
+
+Table 4 and Figure 7 shows the relative risk or how much more likely each respective test group is to click on a search result at least once in a session in the new search location (test group) than the old search location (control group). On Persian Wikipedia, users that saw the new header location are about 1.029 times more likely to click on at least one result during a session than users that saw the old header location, with a 95% confidence interval of 1.017-1.043. For the other 5 wikis in the test, the 95% credible intervals contain 1 indicating do not have sufficient evidence to draw definitive conclusions for these.
+
+
+### Clickthroughs by Searches
+
+As an alternate measure of user engagement with the provided results, we also reviewed clickthrough rate defined as the number of clicks to a search result divided by the number of searches by wiki and overall.  
+
+```{r searches_counts_data, echo = FALSE}
+searches_counts <- search_sessions_ab_ctr %>%
+  group_by(search_wiki, search_location) %>%
+  summarize(`Average searches\n per session` = mean(search_events), 
+            `Average clicks\n per session` = mean(click_events), .groups = "drop") %>%
+  ungroup %>%
+  tidyr::gather(metric, value, -c(search_wiki, search_location))
+```
+
+```{r searches_counts_cap, echo=FALSE}
+searches_clicks_counts_cap <- format_caption(figure_caps, "Average Searches and Clicks")
+```
+
+``````{r searches_counts_plot , echo=FALSE, fig.cap=searches_clicks_counts_cap}
+p <- ggplot(searches_counts, aes(x = 1, y = value, color = search_location, ymin = 0, ymax = value)) +
+        geom_pointrange(position = position_dodge(width = 0.5)) +
+        geom_text(aes(label = (function(values, metrics) {
+          return(mapply(function(value, metric) {
+          if (grepl("total", metric, fixed = TRUE)) {
+            return(polloi::compress(value))
+          } else {
+        return(round(value, 2))
+          }
+        }, value = values, metric = metrics))
+      })(value, metric), y = -0.5, vjust = "top"),
+        position = position_dodge(width = 0.5)) +
+      facet_grid(metric ~ search_wiki, scale = "free_y") +
+      scale_y_continuous(
+      expand = c(0.5, 0),
+      labels = function(x) {
+      y <- x
+      y[x < 0] <- ""
+      return(y)
+        }
+      ) +
+      scale_color_brewer("Group", palette = "Set1") +
+      theme_minimal(base_family = "GillSans") +
+      theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.background = element_rect(fill = "gray90"),
+        panel.border = element_rect(color = "gray30", fill = NA),
+        strip.text.y = element_text(size = 12, angle = 0)) +
+      labs(x = NULL, y = NULL,
+       title = "Average number of searches and clicks per session by test group and wiki",
+       subtitle = "For Wikis included in the AB Test")
+
+p
+ggsave("Figures/avg_searches_bywiki.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+Users in both the new and the old search location groups have a similar average number of clicks per session, ranging from 0.94 to 1. There is a little more variance in the average number of searches per session for the test wikis and search location groups.
+
+Hewbrew Wikipedia only averages between 1 to 2 searches per session for both search location groups while the other wikis average searches per session range from 3 to 7 searches per session. 
+
+### Overall
+
+```{r searches_ctr_overall, echo = FALSE}
+searches_ctr_overall <- search_sessions_ab_ctr %>%
+    group_by(search_location) %>%
+    summarize(searches = sum(search_events), 
+            clickthroughs = sum(click_events), .groups = "drop") %>%
+    group_by(search_location) %>%
+    dplyr::do(binom::binom.bayes(.$clickthroughs, .$searches, conf.level = 0.95))
+
+```
+
+```{r bcda_searches_ctr_overall, echo = FALSE}
+bcda_searches_ctr_overall <- searches_ctr_overall %>%
+  arrange(desc(search_location)) %>%
+  group_by(method) %>%
+  summarize(BCDA::tidy(BCDA::beta_binom(.$x, .$n), interval_type = "HPD"), .groups = "drop") %>%
+  ungroup() 
+
+```
+
+```{r bcda_searches_ctr_overall_cap, echo=FALSE}
+bcda_searches_ctr_overall_cap <- format_caption(figure_caps, "BCDA ctr searches overall")
+```
+
+```{r bcda_searches_ctr_overall_plot , echo=FALSE, fig.cap=bcda_searches_ctr_overall_cap}
+p <- bcda_searches_ctr_overall %>%
+  mutate(term = factor(
+    term,
+    levels = c("p2", "p1", "prop_diff", "relative_risk", "odds_ratio"),
+    labels = c("Pr[Old Search Location]", "Pr[New Search Location]", "Pr[New Search Location] - Pr[Old Search Location]", "Relative Risk", "Odds Ratio")
+  )) %>%
+  ggplot(aes(x = 1, y = estimate, ymin = conf.low, ymax = conf.high)) +
+  geom_segment(y = 1, yend = 1, x = 0.99, xend = 1.05, linetype = "dashed", color = "gray40") +
+  geom_segment(y = 0, yend = 0, x = 0.99, xend = 1.05, linetype = "dashed", color = "gray40") +
+  geom_pointrange() +
+  geom_text(aes(label = round(estimate, 4), y = estimate + (conf.high - estimate)/2,
+                hjust = "left"), nudge_x = 0.005) +
+  facet_grid( ~ term, scales = "free_y") +
+  theme_minimal(base_family = "GillSans") +
+  scale_x_continuous(limits = c(0.99, 1.05)) +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.background = element_rect(fill = "gray90"),
+        panel.border = element_rect(color = "gray30", fill = NA),
+        strip.text.y = element_text(size = 12, angle = 0)) +
+  labs(x = NULL, y = "Estimate",
+       title = "How likely new search location users were to click on search results",
+       subtitle = "Only including searches with results shown",
+       caption = "* 95% credible intervals calculated as Highest Posterior Density (HPD) intervals")
+
+p
+ggsave("Figures/bcda_searches_ctr_overall.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+
+
+```{r bcda_ctr_bysearch_overall_summary, results='asis', echo=FALSE}
+list(
+  "Test vs Control" = filter(bcda_searches_ctr_overall, term == "relative_risk")) %>%
+     dplyr::bind_rows(.id = "Comparison") %>%
+     mutate(ci = sprintf("(%.3f, %.3f)", conf.low, conf.high),
+            rr =  sprintf("%.3f", estimate)) %>%
+     select(Comparison,
+         `Relative Risk` = rr,
+         `95% CI` = ci)  %>%
+  fable(format_caption(table_caps, "CTR by search relative risk overall"))
+```
+
+Table 5 and Figure 9 shows the relative risk – how much more likely users were to click on a search result during a search. Estimates indicate users are less likely to engage overall but we do not have sufficient evidence to draw definitive conclusions.
+
+### By Wiki
+
+```{r searches_ctr_bysearches_wiki, echo = FALSE}
+searches_ctr_bysearches_wiki <- search_sessions_ab_ctr  %>%
+    group_by(search_wiki, search_location) %>%
+    summarize(searches = sum(search_events), 
+            clickthroughs = sum(click_events), .groups = "drop") %>%
+    group_by(search_wiki, search_location) %>%
+    dplyr::do(binom::binom.bayes(.$clickthroughs, .$searches, conf.level = 0.95))
+```
+
+```{r searches_ctr_bysearches_wiki_cap, echo=FALSE}
+searches_ctr_bysearches_wiki_cap <- format_caption(figure_caps, "CTR searches by wiki")
+```
+
+```{r searches_ctr_bysearches_wiki_plot , echo=FALSE, fig.cap=searches_ctr_bysearches_wiki_cap}
+p <- searches_ctr_bysearches_wiki %>%
+  ggplot(aes(x = 1, color = search_location, y = mean, ymin = lower, ymax = upper)) +
+  geom_hline(aes(yintercept = mean), linetype = "dashed", color = RColorBrewer::brewer.pal(3, "Set1")[2],
+             data = filter(searches_ctr_bysearches_wiki , search_location == "old_location")) +
+  geom_pointrange(position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = sprintf("%.1f%%", 100 * mean), y = upper + 0.0025, vjust = "bottom"),
+            position = position_dodge(width = 0.5)) +
+  facet_wrap(~ search_wiki, nrow = 1) +
+  scale_color_brewer("Group", palette = "Set1") +
+  scale_y_continuous("Percent of Searches with Clicks", labels = scales::percent_format()) +
+  theme_minimal(base_family = "GillSans") +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.background = element_rect(fill = "gray90"),
+        panel.border = element_rect(color = "gray30", fill = NA)) +
+  labs(x = NULL, title = "Clickthrough rates by searches of test groups across wikis",
+       subtitle = "Each point estimate includes a 95% credible interval",
+       caption = "Only including searches with results shown")
+p
+ggsave("Figures/searches_ctr_bysearches_wiki.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+
+```{r bcda_ctr_bysearches_wiki, echo = FALSE}
+bcda_ctr_bysearches_wiki <- searches_ctr_bysearches_wiki %>%
+  arrange(search_wiki, desc(search_location))  %>%
+  group_by(search_wiki) %>%
+  dplyr::do(BCDA::tidy(BCDA::beta_binom(.$x, .$n), interval_type = "HPD")) %>%
+  ungroup()
+```
+
+```{r bcda_ctr_bysearches_wiki_cap, echo=FALSE}
+bcda_ctr_bysearches_wiki_cap <- format_caption(figure_caps, "BCDA ctr searches by wiki")
+```
+
+````{r bcda_ctr_bysearches_wiki_plot , echo=FALSE, fig.cap=bcda_ctr_bysearches_wiki_cap}
+p <- bcda_ctr_bysearches_wiki %>%
+  mutate(term = factor(
+    term,
+    levels = c("p2", "p1", "prop_diff", "relative_risk", "odds_ratio"),
+    labels = c("Pr[Old Search Location]", "Pr[New Search Location]", "Pr[New Search Location] - Pr[Old Search Location]", "Relative Risk", "Odds Ratio")
+  )) %>%
+  ggplot(aes(x = 1, y = estimate, ymin = conf.low, ymax = conf.high)) +
+  geom_segment(y = 1, yend = 1, x = 0.99, xend = 1.05, linetype = "dashed", color = "gray40") +
+  geom_segment(y = 0, yend = 0, x = 0.99, xend = 1.05, linetype = "dashed", color = "gray40") +
+  geom_pointrange() +
+  geom_text(aes(label = round(estimate, 4), y = estimate + (conf.high - estimate)/2,
+                hjust = "left"), nudge_x = 0.005) +
+  facet_grid(term ~ search_wiki, scales = "free_y") +
+  theme_minimal(base_family = "GillSans") +
+  scale_x_continuous(limits = c(0.99, 1.05)) +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.background = element_rect(fill = "gray90"),
+        panel.border = element_rect(color = "gray30", fill = NA),
+        strip.text.y = element_text(size = 12, angle = 0)) +
+  labs(x = NULL, y = "Estimate",
+       title = "How likely new search location users were to engage with search results",
+       subtitle = "Only including searches with results shown",
+       caption = "* 95% credible intervals calculated as Highest Posterior Density (HPD) intervals")
+
+p
+ggsave("Figures/bcda_ctr_bysearches_wiki.png", p, width = 16, height = 8, units = "in", dpi = 300)
+```
+
+
+
+```{r bcda_ctr_bysearch_wiki_summary, results='asis', echo=FALSE}
+list(
+  "Test vs Control" = filter( bcda_ctr_bysearches_wiki, term == "relative_risk")) %>%
+     dplyr::bind_rows(.id = "Comparison") %>%
+     mutate(ci = sprintf("(%.3f, %.3f)", conf.low, conf.high),
+            rr =  sprintf("%.3f", estimate)) %>%
+     select(Wiki = search_wiki, 
+         `Relative Risk` = rr,
+         `95% CI` = ci) %>%
+      arrange(Wiki)  %>%
+  fable(format_caption(table_caps, "CTR by search relative risk by wiki"))
+```
+
+On a per wiki basis, there were more completed searches (defined by total number of clicks over total number of searches) for the new search location than the old search location on Hebrew, Persian, and Portuguese Wikipedia, while the completed search rates were lower on French Wikipedia, Basque Wikipedia, and French Wikitionary.
+
+Table 6 and Figure 11 above shows the relative risk or how much more likely each respective test group is to click results in the new search location (test group) than the old search location (control group). On Hebrew Wikipedia, users that saw the new header location are about 1.082 times more likely to clickthrough during a search than users that saw the old header location, with a 95% confidence interval of 1.021-1.145. For the other 5 wikis in the test, we do not have sufficient evidence to infer any impact from the search location move.
+ 
+# References
+
+Popov, Mikhail. n.d. BCDA: Tools for Bayesian Categorical Data Analysis. https://github.com/bearloga/BCDA.
+
+[Screenshot by Alex Hollender](hhttps://commons.wikimedia.org/wiki/File:Search_1_-_Search_widget_move_-_wiktionary_-_GIF.gif) available on [Wikimedia Commons](https://commons.wikimedia.org/wiki/Main_Page), licensed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/deed.en).
+
+
+FIXME: COMPLETE REFERENCE LIST
