@@ -263,7 +263,7 @@ p <- search_sessions_ab_bywiki  %>%
         scale_fill_brewer(name="Search Location", palette="Set1")  +
         theme(
             plot.title = element_text(hjust = 0.5),
-            text = element_text(size=12),
+            text = element_text(size=14),
             axis.title.x=element_blank(),
             axis.text.x=element_blank(),
             legend.position = "bottom")
@@ -295,7 +295,7 @@ p <- ggplot(search_sessions_ab_bywiki, aes(x = search_location, y = sessions, co
   scale_color_brewer(name = "Search Location", palette="Set1")  +
   theme(
             plot.title = element_text(hjust = 0.5),
-            text = element_text(size=12),
+             text = element_text(size=14),
             axis.title.x=element_blank(),
             axis.text.x=element_blank(),
             legend.position = "bottom")
@@ -431,7 +431,7 @@ mult_effect_test_group <- car::deltaMethod(lm_fit, "exp(test_groupWikiProjectInT
 mult_effect_test_group
 ```
 
-While the estimate of the effect of the new search location is 2.4% increase in search sessions initiated, the 95% confidence interval contains 1, meaning we do not have sufficient evidence to draw definitive conclusions. Note that the effect from the search move is dampened because it was only deployed to 50% of logged-in users as part of the AB test. 
+While the estimate of the effect of the new search location is 2.4% increase in search sessions initiated, the 95% confidence interval is [-13.8%, 18.7%], meaning we do not have sufficient evidence to draw definitive conclusions. Note that the effect from the search move is dampened because it was only deployed to 50% of logged-in users as part of the AB test. 
 
 
 # Search Sessions Completed
@@ -506,11 +506,12 @@ p <- plot(bcda_sessions_ctr_overall) +
   theme(legend.position = "bottom",
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
+        text = element_text(size=14),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
         panel.border = element_rect(color = "gray30", fill = NA),
-        strip.text.y = element_text(size = 12, angle = 0)) +
+        strip.text.y = element_text(size = 14, angle = 0)) +
   labs(x = NULL, y = "Estimate",
        title = "How likely new search location users were to click on a search result at least once in a session",
        subtitle = "Across all wikis in the AB test; Only including searches with results shown",
@@ -557,6 +558,7 @@ p <- searches_ctr_bysession_wiki %>%
   theme(legend.position = "bottom",
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
+        text = element_text(size=14),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
@@ -615,11 +617,12 @@ p <- bcda_ctr_bysession_wiki %>%
   theme(legend.position = "bottom",
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
+        text = element_text(size=14),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
         panel.border = element_rect(color = "gray30", fill = NA),
-        strip.text.y = element_text(size = 12, angle = 0)) +
+        strip.text.y = element_text(size = 14, angle = 0)) +
   labs(x = NULL, y = "Estimate",
        title = "How likely new search location users were to click on a search result at least once in a session",
        subtitle = "For each Wiki in the AB test; Only including searches with results shown",
@@ -682,7 +685,7 @@ p <- ggplot(searches_counts, aes(x = 1, y = value, color = search_location, ymin
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
         panel.border = element_rect(color = "gray30", fill = NA),
-        strip.text.y = element_text(size = 12, angle = 0)) +
+        strip.text.y = element_text(size = 14, angle = 0)) +
       labs(x = NULL, y = NULL,
        title = "Average number of searches and clicks per session by test group and wiki",
        subtitle = "For each Wiki included in the AB Test; Only including searches with results shown")
@@ -750,11 +753,12 @@ p <- bcda_searches_ctr_overall %>%
   theme(legend.position = "bottom",
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
+        text = element_text(size=14),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
         panel.border = element_rect(color = "gray30", fill = NA),
-        strip.text.y = element_text(size = 12, angle = 0)) +
+        strip.text.y = element_text(size = 14, angle = 0)) +
   labs(x = NULL, y = "Estimate",
        title = "How likely new search location users were to click on search results",
        subtitle = "Only including searches with results shown",
@@ -797,6 +801,7 @@ p <- searches_ctr_bysearches_wiki %>%
   theme(legend.position = "bottom",
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
+        text = element_text(size=14),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
@@ -855,11 +860,12 @@ p <- bcda_ctr_bysearches_wiki %>%
   theme(legend.position = "bottom",
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
+        text = element_text(size=14),
         axis.ticks.x = element_blank(),
         axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
         panel.border = element_rect(color = "gray30", fill = NA),
-        strip.text.y = element_text(size = 12, angle = 0)) +
+        strip.text.y = element_text(size = 14, angle = 0)) +
   labs(x = NULL, y = "Estimate",
        title = "How likely new search location users were to engage with search results",
        subtitle = "Only including searches with results shown",
@@ -875,7 +881,7 @@ Table 6 and Figure 12 above shows the relative risk or how much more likely each
  
 # References
 
-Keyes, Oliver, and Mikhail Popov. 2017. Wmf: R Code for Wikimedia Foundation Internal Usage. https://phabricator.wikimedia.org/diffusion/1821/.
+Mikhail Popov and Os Keyes (2021). wmfdata: R Tools For Wikimedia Foundation's Analysts And Data Scientists. R package version 0.9.1. https://github.com/wikimedia/wmfdata-r
 
 Popov, Mikhail. n.d. BCDA: Tools for Bayesian Categorical Data Analysis. https://github.com/bearloga/BCDA.
 
