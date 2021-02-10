@@ -507,8 +507,6 @@ p <- plot(bcda_sessions_ctr_overall) +
         panel.grid.major.x = element_blank(),
         panel.grid.minor.x = element_blank(),
         text = element_text(size=14),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank(),
         strip.background = element_rect(fill = "gray90"),
         panel.border = element_rect(color = "gray30", fill = NA),
         strip.text.y = element_text(size = 14, angle = 0)) +
